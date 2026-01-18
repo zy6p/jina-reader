@@ -57,6 +57,9 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     targetSelector?: string | string[];
     removeSelector?: string | string[];
     keepImgDataUrl?: boolean;
+    referer?: string;
+    acceptLanguage?: string;
+    extraHeaders?: Record<string, string>;
 }
 
 export interface FormattedPage {
@@ -842,15 +845,17 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             this.threadLocal.set('timeout', opts.timeout * 1000);
         }
 
-        const cookies = req.headers['x-set-cookie'] ?
-            (Array.isArray(req.headers['x-set-cookie']) ? req.headers['x-set-cookie'] : [req.headers['x-set-cookie']])
-                .map(cookie => {
-                    const [name, value] = cookie.split('=');
-                    return { name, value, url: urlToCrawl.toString() };
-                })
+        const cookies = Array.isArray(opts.setCookies)
+            ? opts.setCookies.map((cookie) => {
+                if (cookie.url || cookie.domain) {
+                    return cookie;
+                }
+                return { ...cookie, url: urlToCrawl.toString() };
+            })
             : [];
-
-        console.log('Cookies:', cookies);
+        if (cookies.length) {
+            console.log('Cookies:', cookies);
+        }
         const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: opts.proxyUrl,
             cookies: cookies,
@@ -859,6 +864,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             targetSelector: opts.targetSelector,
             waitForSelector: opts.waitForSelector,
             overrideUserAgent: opts.userAgent,
+            referer: opts.referer,
+            acceptLanguage: opts.acceptLanguage,
+            extraHeaders: opts.extraHeaders,
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
             withIframe: opts.withIframe,
         };

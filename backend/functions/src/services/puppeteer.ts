@@ -79,6 +79,9 @@ export interface ScrappingOptions {
     minIntervalMs?: number;
     overrideUserAgent?: string;
     timeoutMs?: number;
+    referer?: string;
+    acceptLanguage?: string;
+    extraHeaders?: Record<string, string>;
 }
 
 
@@ -97,6 +100,47 @@ puppeteer.use(puppeteerBlockResources({
 puppeteer.use(puppeteerPageProxy({
     interceptResolutionPriority: 1,
 }));
+
+const DEFAULT_USER_AGENT =
+    process.env.READER_USER_AGENT ||
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const DEFAULT_ACCEPT_LANGUAGE = process.env.READER_ACCEPT_LANGUAGE;
+const DEFAULT_TIMEZONE = process.env.READER_TIMEZONE;
+const DEFAULT_VIEWPORT = parseViewport(process.env.READER_VIEWPORT) || { width: 1366, height: 768 };
+const DEFAULT_LANG_TAG = DEFAULT_ACCEPT_LANGUAGE?.split(',')[0]?.trim() || '';
+const FORBIDDEN_HEADER_KEYS = new Set(['host', 'content-length', 'connection', 'transfer-encoding', 'upgrade']);
+
+function parseViewport(value?: string): { width: number; height: number } | null {
+    if (!value) return null;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return null;
+    const parts = normalized.includes('x') ? normalized.split('x') : normalized.split(',');
+    if (parts.length !== 2) return null;
+    const width = Number.parseInt(parts[0].trim(), 10);
+    const height = Number.parseInt(parts[1].trim(), 10);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+    if (width <= 0 || height <= 0) return null;
+    return { width, height };
+}
+
+function normalizeExtraHeaders(headers?: Record<string, string>): Record<string, string> {
+    if (!headers) {
+        return {};
+    }
+    const normalized: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+        if (!key) continue;
+        const lowered = key.trim().toLowerCase();
+        if (!lowered || FORBIDDEN_HEADER_KEYS.has(lowered)) {
+            continue;
+        }
+        if (value === undefined || value === null) {
+            continue;
+        }
+        normalized[lowered] = String(value);
+    }
+    return normalized;
+}
 
 const SCRIPT_TO_INJECT_INTO_FRAME = `
 ${READABILITY_JS}
@@ -259,9 +303,11 @@ export class PuppeteerControl extends AsyncService {
         const args = [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--single-process'
+            '--disable-dev-shm-usage'
         ];
+        if (DEFAULT_LANG_TAG) {
+            args.push(`--lang=${DEFAULT_LANG_TAG}`);
+        }
 
         this.browser = await puppeteer.launch({
             args: args,
@@ -337,8 +383,14 @@ export class PuppeteerControl extends AsyncService {
 
         // preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
         // preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
+        if (DEFAULT_USER_AGENT) {
+            preparations.push(page.setUserAgent(DEFAULT_USER_AGENT));
+        }
         preparations.push(page.setBypassCSP(true));
-        preparations.push(page.setViewport({ width: 1024, height: 1024 }));
+        preparations.push(page.setViewport(DEFAULT_VIEWPORT));
+        if (DEFAULT_TIMEZONE) {
+            preparations.push(page.emulateTimezone(DEFAULT_TIMEZONE));
+        }
         preparations.push(page.exposeFunction('reportSnapshot', (snapshot: PageSnapshot) => {
             if (snapshot.href === 'about:blank') {
                 return;
@@ -529,6 +581,17 @@ document.addEventListener('load', handlePageLoad);
 
         if (options?.overrideUserAgent) {
             await page.setUserAgent(options.overrideUserAgent);
+        }
+        const extraHeaders: Record<string, string> = normalizeExtraHeaders(options?.extraHeaders);
+        const acceptLanguage = options?.acceptLanguage || DEFAULT_ACCEPT_LANGUAGE;
+        if (acceptLanguage) {
+            extraHeaders['accept-language'] = acceptLanguage;
+        }
+        if (options?.referer) {
+            extraHeaders['referer'] = options.referer;
+        }
+        if (Object.keys(extraHeaders).length) {
+            await page.setExtraHTTPHeaders(extraHeaders);
         }
 
         let nextSnapshotDeferred = Defer();

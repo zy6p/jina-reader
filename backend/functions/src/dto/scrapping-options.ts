@@ -106,6 +106,22 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Referer': {
+                    description: `Override Referer for the page request.`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Accept-Language': {
+                    description: `Override Accept-Language for the page request.`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Extra-Headers': {
+                    description: `JSON object of extra headers to forward to the page request.\n\n` +
+                        'Example: `{"sec-ch-ua":"\\"Chromium\\";v=\\"143\\"","x-custom":"value"}`',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-Timeout': {
                     description: `Specify timeout in seconds. Max 180.`,
                     in: 'header',
@@ -181,6 +197,15 @@ export class CrawlerOptions extends AutoCastable implements AutoCastableMetaClas
     @Prop()
     userAgent?: string;
 
+    @Prop()
+    referer?: string;
+
+    @Prop()
+    acceptLanguage?: string;
+
+    @Prop()
+    extraHeaders?: Record<string, string>;
+
     @Prop({
         validate: (v: number) => v > 0 && v <= 180,
         type: Number,
@@ -255,6 +280,18 @@ export class CrawlerOptions extends AutoCastable implements AutoCastableMetaClas
             const overrideUserAgent = getHeader('x-user-agent');
             instance.userAgent ??= overrideUserAgent;
 
+            const referer = getHeader('x-referer') || getHeader('referer');
+            instance.referer ??= referer;
+
+            const acceptLanguage = getHeader('x-accept-language') || getHeader('accept-language');
+            instance.acceptLanguage ??= acceptLanguage;
+
+            const extraHeadersRaw = getHeader('x-extra-headers');
+            const extraHeaders = parseExtraHeaders(extraHeadersRaw);
+            if (extraHeaders) {
+                instance.extraHeaders ??= extraHeaders;
+            }
+
             const keepImgDataUrl = getHeader('x-keep-img-data-url');
             if (keepImgDataUrl !== undefined) {
                 instance.keepImgDataUrl = Boolean(keepImgDataUrl);
@@ -318,3 +355,50 @@ function filterSelector(s?: string | string[]) {
 
     return selectors;
 };
+
+function parseExtraHeaders(value?: string): Record<string, string> | undefined {
+    if (!value) {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const result: Record<string, string> = {};
+            for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+                if (!key) continue;
+                result[key] = val === undefined || val === null ? '' : String(val);
+            }
+            if (Object.keys(result).length) {
+                return result;
+            }
+        }
+    } catch {
+        // fall through to loose parsing
+    }
+
+    const result: Record<string, string> = {};
+    const pairs = trimmed.split(/\r?\n|;|,/).map((p) => p.trim()).filter(Boolean);
+    for (const pair of pairs) {
+        const colonIdx = pair.indexOf(':');
+        const eqIdx = pair.indexOf('=');
+        let splitIdx = -1;
+        if (colonIdx >= 0 && (eqIdx === -1 || colonIdx < eqIdx)) {
+            splitIdx = colonIdx;
+        } else if (eqIdx >= 0) {
+            splitIdx = eqIdx;
+        }
+        if (splitIdx <= 0) {
+            continue;
+        }
+        const key = pair.slice(0, splitIdx).trim();
+        const val = pair.slice(splitIdx + 1).trim();
+        if (!key) continue;
+        result[key] = val;
+    }
+
+    return Object.keys(result).length ? result : undefined;
+}
